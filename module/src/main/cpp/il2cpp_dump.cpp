@@ -24,8 +24,10 @@
 #undef DO_API
 
 static uint64_t il2cpp_base = 0;
+static void* g_il2cpp_handle = nullptr;
 
 void init_il2cpp_api(void *handle) {
+    g_il2cpp_handle = handle;
 #define DO_API(r, n, p) {                      \
     n = (r (*) p)xdl_sym(handle, #n, nullptr); \
     if(!n) {                                   \
@@ -426,4 +428,56 @@ void il2cpp_dump(const char *outDir) {
     }
     outStream.close();
     LOGI("dump done!");
+    
+    // Dump decrypted metadata
+    LOGI("Attempting to dump metadata...");
+    if (g_il2cpp_handle) {
+        void* metadata = xdl_sym(g_il2cpp_handle, "s_GlobalMetadata", nullptr);
+        if (metadata) {
+            LOGI("Found s_GlobalMetadata at %p", metadata);
+            void** metadataPtr = (void**)metadata;
+            void* metadataData = *metadataPtr;
+            LOGI("Metadata data at %p", metadataData);
+            
+            uint32_t* header = (uint32_t*)metadataData;
+            uint32_t sanity = header[0];
+            if (sanity == 0xFAB11BAF) {
+                uint32_t version = header[1];
+                LOGI("Metadata version: %u", version);
+                
+                // Read size from header - it's at different offsets for different versions
+                // For v24+, size is at offset 0x8
+                size_t metadataSize = 0;
+                if (version >= 24) {
+                    metadataSize = *((uint32_t*)metadataData + 2);
+                } else {
+                    metadataSize = 50 * 1024 * 1024; // Fallback: 50MB
+                }
+                LOGI("Metadata size: %zu bytes", metadataSize);
+                
+                auto metadataPath = std::string(outDir).append("/files/global-metadata.dat");
+                std::ofstream metadataStream(metadataPath, std::ios::binary);
+                if (metadataStream) {
+                    metadataStream.write((char*)metadataData, metadataSize);
+                    metadataStream.close();
+                    LOGI("Metadata dumped to %s", metadataPath.c_str());
+                } else {
+                    LOGE("Failed to open metadata file for writing");
+                }
+            } else {
+                LOGE("Invalid metadata sanity check: 0x%X", sanity);
+            }
+        } else {
+            LOGW("s_GlobalMetadata symbol not found, trying alternative methods...");
+            // Try alternative symbol names
+            metadata = xdl_sym(g_il2cpp_handle, "s_Il2CppMetadataRegistration", nullptr);
+            if (metadata) {
+                LOGI("Found s_Il2CppMetadataRegistration at %p", metadata);
+            } else {
+                LOGE("Could not find metadata symbols");
+            }
+        }
+    } else {
+        LOGE("Il2Cpp handle not available");
+    }
 }
